@@ -1,6 +1,6 @@
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %
-%Geometry-aware local credit assignment
+% Draft
 %
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
@@ -27,9 +27,8 @@
 \def\ZZ{\mathbb{Z}}
 \newcommand{\abs}[1]{\left\vert#1\right\vert}
 \DeclareMathOperator{\softmax}{softmax}
-\DeclareMathOperator{\argmin}{argmin}
 
-\title{Geometry-Aware Local Credit Assignment in Feed Forward Neural Networks}
+\title{Geometry-Aware Prototype-Conditioned Learning in Feed Forward Neural Networks}
 \author{NIVHSA\\
   \small India}
 
@@ -37,303 +36,240 @@
 \maketitle
 
 \begin{abstract}
-We propose a geometry-aware learning framework for feed forward neural networks in which parameter updates are modulated by the local structure of the hidden representation space. Instead of treating all inputs with a single global set of fixed weights, we associate each hidden layer with a small set of latent prototypes and compute soft region memberships for each sample. These memberships determine an input-dependent effective weight matrix and a local credit assignment rule. The resulting method is motivated by the hypothesis that destructive interference between distant data regions can be reduced when learning is made local and geometry-aware. The framework is realizable for both theory and simulation, and naturally applies to standard feed forward neural networks with one or more hidden layers.
+We propose a geometry-aware learning framework for feed forward neural networks in which local structure in hidden representation space modulates the effective parameters used for prediction. Instead of applying a single globally shared output mapping to every sample, we associate the hidden representation with a small set of latent prototypes, compute soft prototype memberships, and use these memberships to form an input-dependent mixture of output experts. We further introduce an auxiliary local target in hidden space, defined by the same memberships, so that the hidden representation is regularized by local geometry. The resulting model is trained end-to-end by gradient descent on a differentiable objective consisting of the supervised output loss and the auxiliary local loss. The method is motivated by the hypothesis that destructive interference between distant data regions can be reduced when learning is informed by local geometry in representation space.
 \end{abstract}
 
 \section{Introduction}
 
-Fig.~\ref{fig:NN} illustrates a basic feed forward neural network (FFNN) with one hidden layer. Let the input be the two-dimensional vector $\mathbf{x}=(x_1,x_2)^\top$. In a standard FFNN, the parameters are shared globally across all inputs, and training is commonly carried out by backpropagating a single output loss through the whole network. While this paradigm has been highly successful, it also couples the updates induced by all samples through a common parameter set. Such coupling may lead to interference between distant regions of the data distribution.
+In a standard feed forward neural network (FFNN), the same parameter tensors are shared across all samples, and training is typically driven by a global output loss propagated through the entire network. This paradigm has been highly successful, but it also couples the updates induced by all samples through a common parameter set. When two samples arise from distinct regions of the data distribution, their induced updates may interfere.
 
-In this work, we consider a different principle: \emph{credit assignment should depend not only on output error but also on the local geometry of the hidden representation space}. To this end, we introduce latent prototypes at each hidden layer, compute soft memberships of each sample to those prototypes, and use these memberships to form an input-dependent effective weight matrix. We further define a layer-local target and a local loss so that the learning signal at a layer is shaped by local geometry rather than only by a single global backward chain.
+The central idea of this work is that neural learning should depend not only on the global output error, but also on the \emph{local geometry} of the hidden representation space. We therefore augment a one-hidden-layer FFNN with three ingredients:
+\begin{enumerate}
+    \item latent prototypes in hidden space,
+    \item soft memberships of each sample to those prototypes,
+    \item and a prototype-conditioned auxiliary target in hidden space.
+\end{enumerate}
+The memberships determine how strongly each sample uses a collection of output experts, thereby producing input-dependent effective parameters. The same memberships also define a local hidden-space target, which regularizes the hidden representation.
+
+For clarity and consistency with the implementation, the model studied in this paper is a one-hidden-layer FFNN trained end-to-end by automatic differentiation. The theoretical analysis later in the paper is presented as a simplified mechanism analysis that isolates the interference-reduction effect of prototype-conditioned gating; it is not claimed to be a full convergence analysis of the exact nonlinear optimization dynamics.
 
 \begin{figure}[t]
   \centering
   \includegraphics[width=\linewidth]{document.png}
-  \caption{Feed forward neural network with one hidden layer. The proposed method retains the same network architecture, but augments it with latent prototypes and geometry-aware local credit assignment.}
+  \caption{Backbone one-hidden-layer feed forward neural network. In the proposed method, the hidden representation is further coupled to latent prototypes, soft prototype memberships, a prototype-conditioned mixture of output experts, and an auxiliary local loss. The figure should therefore be interpreted as the base architecture on top of which the geometry-aware mechanism is added.}
   \label{fig:NN}
 \end{figure}
 
-\section{Standard forward model}
+\section{Geometry-aware prototype-conditioned model}
 
-For the network in Fig.~\ref{fig:NN}, the standard forward propagation equations are
-\begin{equation}
-z_1^{[0]} = w_{11}^{[0]}x_1 + w_{21}^{[0]}x_2 + b_1^{[0]},
-\qquad
-a_1^{[0]} = \sigma(z_1^{[0]}),
-\end{equation}
-\begin{equation}
-z_2^{[0]} = w_{12}^{[0]}x_1 + w_{22}^{[0]}x_2 + b_2^{[0]},
-\qquad
-a_2^{[0]} = \sigma(z_2^{[0]}),
-\end{equation}
-\begin{equation}
-z_1^{[1]} = w_{11}^{[1]}a_1^{[0]} + w_{21}^{[1]}a_2^{[0]} + b_1^{[1]},
-\qquad
-a_1^{[1]} = \sigma(z_1^{[1]}),
-\end{equation}
-where $\sigma(\cdot)$ is the sigmoid function.
+\subsection{Backbone hidden representation}
 
-For a training pair $(\mathbf{x},y)$, we use a proper output loss. For regression,
+Let $\mathbf{x}\in\RR^d$ be the input. We consider a one-hidden-layer FFNN with hidden dimension $H$. The hidden representation is
 \begin{equation}
-\mathcal{L}_{\mathrm{out}} = \frac{1}{2}\left(\hat{y}-y\right)^2,
-\label{eq:outloss_reg}
+\mathbf{h}(\mathbf{x})=\tanh(W_h \mathbf{x}+\mathbf{b}_h),
+\label{eq:hidden}
 \end{equation}
-and for classification one may instead use cross-entropy. In the rest of the paper, the notation $\mathcal{L}_{\mathrm{out}}$ denotes the output-layer loss.
+where $W_h\in\RR^{H\times d}$ and $\mathbf{b}_h\in\RR^{H}$ are trainable parameters.
 
-\section{Proposed method}
+For a $C$-class classification problem, the network ultimately outputs logits in $\RR^C$ and probabilities
+\begin{equation}
+\mathbf{p}(\mathbf{x})=\softmax(\mathbf{z}(\mathbf{x})).
+\label{eq:prob}
+\end{equation}
 
 \subsection{Latent prototypes and soft memberships}
 
-Let $\mathbf{a}^{[\ell-1]}$ denote the activation vector entering layer $\ell$. For each layer $\ell$, we introduce $K_\ell$ latent prototypes
+We introduce $K$ trainable latent prototypes
 \[
-\mathbf{c}_1^{[\ell]},\mathbf{c}_2^{[\ell]},\dots,\mathbf{c}_{K_\ell}^{[\ell]} \in \RR^{d_{\ell-1}},
+\mathbf{c}_1,\mathbf{c}_2,\dots,\mathbf{c}_K \in \RR^H
 \]
-where $d_{\ell-1}$ is the dimension of $\mathbf{a}^{[\ell-1]}$.
-
-Given a sample $\mathbf{x}$ with hidden representation $\mathbf{a}^{[\ell-1]}(\mathbf{x})$, we define its soft membership to prototype $k$ by
+in hidden representation space. For an input $\mathbf{x}$, the hidden representation $\mathbf{h}(\mathbf{x})$ is softly assigned to these prototypes via
 \begin{equation}
-g_k^{[\ell]}(\mathbf{x})
+g_k(\mathbf{x})
 =
 \frac{
 \exp\!\left(
--\frac{\|\mathbf{a}^{[\ell-1]}(\mathbf{x})-\mathbf{c}_k^{[\ell]}\|_2^2}{\tau_\ell}
+-\frac{\|\mathbf{h}(\mathbf{x})-\mathbf{c}_k\|_2^2}{\tau}
 \right)
 }{
-\sum_{r=1}^{K_\ell}
+\sum_{r=1}^{K}
 \exp\!\left(
--\frac{\|\mathbf{a}^{[\ell-1]}(\mathbf{x})-\mathbf{c}_r^{[\ell]}\|_2^2}{\tau_\ell}
+-\frac{\|\mathbf{h}(\mathbf{x})-\mathbf{c}_r\|_2^2}{\tau}
 \right)
 },
+\qquad k=1,\dots,K,
 \label{eq:gating}
 \end{equation}
-where $\tau_\ell>0$ is a temperature parameter.
+where $\tau>0$ is a temperature parameter.
 
-Thus, for each input, the vector
+The membership vector
 \[
-\mathbf{g}^{[\ell]}(\mathbf{x})
-=
-\left(g_1^{[\ell]}(\mathbf{x}),\dots,g_{K_\ell}^{[\ell]}(\mathbf{x})\right)
+\mathbf{g}(\mathbf{x})=\bigl(g_1(\mathbf{x}),\dots,g_K(\mathbf{x})\bigr)
 \]
-gives a soft description of the local geometry of the representation at layer $\ell$.
+encodes the local geometry of $\mathbf{x}$ in hidden space.
 
-\subsection{Input-dependent effective weights}
+\subsection{Prototype-conditioned output experts}
 
-Instead of one global weight matrix at layer $\ell$, we introduce $K_\ell$ region-specific parameter matrices
+Instead of one global output map, we use $K$ output experts:
 \[
-W_1^{[\ell]},W_2^{[\ell]},\dots,W_{K_\ell}^{[\ell]}.
-\]
-The effective weight matrix for sample $\mathbf{x}$ is then
-\begin{equation}
-\widetilde{W}^{[\ell]}(\mathbf{x})
-=
-\sum_{k=1}^{K_\ell}
-g_k^{[\ell]}(\mathbf{x})\,W_k^{[\ell]}.
-\label{eq:effectiveW}
-\end{equation}
-Similarly, the effective bias vector is
-\begin{equation}
-\widetilde{\mathbf{b}}^{[\ell]}(\mathbf{x})
-=
-\sum_{k=1}^{K_\ell}
-g_k^{[\ell]}(\mathbf{x})\,\mathbf{b}_k^{[\ell]}.
-\label{eq:effectiveb}
-\end{equation}
-
-Hence the forward propagation at layer $\ell$ becomes
-\begin{equation}
-\mathbf{z}^{[\ell]}
-=
-\widetilde{W}^{[\ell]}(\mathbf{x})\,\mathbf{a}^{[\ell-1]}
-+
-\widetilde{\mathbf{b}}^{[\ell]}(\mathbf{x}),
+W_1^{\mathrm{exp}},\dots,W_K^{\mathrm{exp}} \in \RR^{C\times H},
 \qquad
-\mathbf{a}^{[\ell]}=\sigma(\mathbf{z}^{[\ell]}).
-\label{eq:newforward}
+\mathbf{b}_1^{\mathrm{exp}},\dots,\mathbf{b}_K^{\mathrm{exp}} \in \RR^C.
+\]
+Each expert produces logits
+\begin{equation}
+\mathbf{z}_k^{\mathrm{exp}}(\mathbf{x})
+=
+W_k^{\mathrm{exp}}\,\mathbf{h}(\mathbf{x})+\mathbf{b}_k^{\mathrm{exp}}.
+\label{eq:expert_logits}
+\end{equation}
+The final logits are a membership-weighted mixture of these experts:
+\begin{equation}
+\mathbf{z}(\mathbf{x})
+=
+\sum_{k=1}^{K}
+g_k(\mathbf{x})\,\mathbf{z}_k^{\mathrm{exp}}(\mathbf{x}).
+\label{eq:mix_logits}
 \end{equation}
 
-For the one-hidden-layer FFNN in Fig.~\ref{fig:NN}, the hidden-layer effective weights are therefore no longer fixed constants independent of the input. Instead, they adapt according to the location of the sample in latent space.
+Equation \eqref{eq:mix_logits} is the implementation-consistent form of an input-dependent effective output layer. Different regions of hidden space therefore induce different effective parameter usage.
 
-\subsection{Layer-local geometry-aware targets}
+\subsection{Geometry-aware local target and auxiliary loss}
 
-To move beyond a purely global end-to-end learning signal, we introduce a layer-local target. Let
+To make learning explicitly sensitive to local geometry in hidden space, we introduce trainable prototype-associated target vectors
 \[
-\bar{\mathbf{a}}_k^{[\ell-1]}
-=
-\frac{\sum_{n=1}^{N} g_k^{[\ell]}(\mathbf{x}^{(n)})\,\mathbf{a}^{[\ell-1]}(\mathbf{x}^{(n)})}
-{\sum_{n=1}^{N} g_k^{[\ell]}(\mathbf{x}^{(n)})}
+\boldsymbol{\phi}_1,\dots,\boldsymbol{\phi}_K \in \RR^H.
 \]
-denote the prototype-associated average representation. For a given sample $\mathbf{x}$, define its geometry-induced local target as
+For a given input $\mathbf{x}$, the auxiliary target is defined by
 \begin{equation}
-\mathbf{t}^{[\ell]}(\mathbf{x})
+\mathbf{t}(\mathbf{x})
 =
-\sum_{k=1}^{K_\ell}
-g_k^{[\ell]}(\mathbf{x})\,
-\phi^{[\ell]}_k,
+\sum_{k=1}^{K}
+g_k(\mathbf{x})\,\boldsymbol{\phi}_k.
 \label{eq:localtarget}
 \end{equation}
-where $\phi_k^{[\ell]}$ is a learnable target vector or a prototype-dependent desired activation pattern.
-
-We then define the layer-local loss
+The auxiliary local loss is then
 \begin{equation}
-\mathcal{L}_{\mathrm{loc}}^{[\ell]}(\mathbf{x})
+\mathcal{L}_{\mathrm{loc}}(\mathbf{x})
 =
 \frac{1}{2}
 \left\|
-\mathbf{a}^{[\ell]}(\mathbf{x}) - \mathbf{t}^{[\ell]}(\mathbf{x})
+\mathbf{h}(\mathbf{x})-\mathbf{t}(\mathbf{x})
 \right\|_2^2.
 \label{eq:locloss}
 \end{equation}
 
-The total objective is
+Thus, the same local geometry information that determines the effective output map also determines a prototype-conditioned regularization target for the hidden representation.
+
+\subsection{Supervised loss and end-to-end objective}
+
+For classification, let $\mathbf{y}\in\{0,1\}^C$ denote the one-hot label vector. The supervised output loss is
 \begin{equation}
-\mathcal{L}
+\mathcal{L}_{\mathrm{out}}(\mathbf{x},\mathbf{y})
 =
-\mathcal{L}_{\mathrm{out}}
+-\sum_{c=1}^{C} y_c \log p_c(\mathbf{x}),
+\label{eq:outloss}
+\end{equation}
+where $\mathbf{p}(\mathbf{x})$ is defined in \eqref{eq:prob}.
+
+The implementation-consistent training objective for one sample is
+\begin{equation}
+\mathcal{L}_{\mathrm{impl}}(\mathbf{x},\mathbf{y})
+=
+\mathcal{L}_{\mathrm{out}}(\mathbf{x},\mathbf{y})
 +
-\lambda \sum_{\ell=1}^{L-1}\mathcal{L}_{\mathrm{loc}}^{[\ell]}
-+
-\beta \sum_{\ell=1}^{L}\sum_{k=1}^{K_\ell}\|W_k^{[\ell]}\|_F^2,
+\lambda\,\mathcal{L}_{\mathrm{loc}}(\mathbf{x}),
 \label{eq:totalloss}
 \end{equation}
-where $\lambda\ge 0$ controls the strength of the geometry-aware local supervision and $\beta\ge 0$ is a regularization coefficient.
+where $\lambda\ge 0$ controls the strength of the geometry-aware local regularization.
 
-\subsection{Geometry-aware local credit assignment}
-
-The central idea is that updates at a layer should be influenced more strongly by the local region to which the sample belongs. For layer $\ell$, the update to the region-specific matrix $W_k^{[\ell]}$ is defined as
+Over a training set $\mathcal{D}=\{(\mathbf{x}^{(n)},\mathbf{y}^{(n)})\}_{n=1}^{N}$, the empirical objective is
 \begin{equation}
-W_k^{[\ell]}
-\leftarrow
-W_k^{[\ell]}
--
-\eta\,
-g_k^{[\ell]}(\mathbf{x})\,
-\delta_{\mathrm{loc}}^{[\ell]}(\mathbf{x})
-\left(\mathbf{a}^{[\ell-1]}(\mathbf{x})\right)^\top,
-\label{eq:localupdate}
+\mathcal{J}(\Theta)
+=
+\frac{1}{N}\sum_{n=1}^{N}
+\mathcal{L}_{\mathrm{impl}}(\mathbf{x}^{(n)},\mathbf{y}^{(n)}),
+\label{eq:empirical_objective}
 \end{equation}
 where
 \begin{equation}
-\delta_{\mathrm{loc}}^{[\ell]}(\mathbf{x})
-=
-\left(\mathbf{a}^{[\ell]}(\mathbf{x})-\mathbf{t}^{[\ell]}(\mathbf{x})\right)
-\odot
-\sigma'\!\left(\mathbf{z}^{[\ell]}(\mathbf{x})\right).
-\label{eq:localdelta}
+\Theta=
+\left\{
+W_h,\mathbf{b}_h,\{W_k^{\mathrm{exp}},\mathbf{b}_k^{\mathrm{exp}}\}_{k=1}^{K},
+\{\mathbf{c}_k\}_{k=1}^{K},
+\{\boldsymbol{\phi}_k\}_{k=1}^{K}
+\right\}.
+\label{eq:params}
 \end{equation}
-Here $\odot$ denotes elementwise multiplication.
 
-Equation \eqref{eq:localupdate} is the proposed local credit assignment rule. The term $g_k^{[\ell]}(\mathbf{x})$ gates the update by local geometry, so samples from different regions induce different effective updates. This is the key departure from a single globally shared update applied uniformly to all samples.
+\subsection{Training rule}
 
-For the output layer, one may either keep the standard supervised update or use a similar gated form. In the present formulation, we keep the standard supervised output update for stability:
+All trainable quantities in \eqref{eq:params} are optimized jointly by gradient descent on the differentiable objective \eqref{eq:empirical_objective}. For a minibatch estimate of the loss, the parameter update is
 \begin{equation}
-W^{[L]}
+\Theta
 \leftarrow
-W^{[L]} - \eta\,
-\delta^{[L]}(\mathbf{x})
-\left(\mathbf{a}^{[L-1]}(\mathbf{x})\right)^\top,
-\label{eq:outupdate}
+\Theta-\eta\,\nabla_{\Theta}\mathcal{J}(\Theta),
+\label{eq:update}
 \end{equation}
-where $\delta^{[L]}$ is the usual output error term associated with $\mathcal{L}_{\mathrm{out}}$.
+where $\eta>0$ is the learning rate.
 
-\subsection{Interpretation in terms of interference reduction}
+This is important: in the implementation used in experiments, the memberships, prototypes, expert parameters, and auxiliary target vectors are all part of a single computational graph. Hence gradients are allowed to flow through the membership function in \eqref{eq:gating}, through the expert mixture in \eqref{eq:mix_logits}, and through the auxiliary target in \eqref{eq:localtarget}. In this sense, the implemented model is an end-to-end differentiable geometry-aware architecture rather than a manually decoupled layer-wise update scheme.
 
-Let $\nabla_\Theta \mathcal{L}(\mathbf{x})$ denote the update direction produced by sample $\mathbf{x}$ for the collection of trainable parameters $\Theta$. The pairwise interference between two samples $\mathbf{x}_p$ and $\mathbf{x}_q$ may be measured by
-\begin{equation}
-I(\mathbf{x}_p,\mathbf{x}_q)
-=
-\frac{
-\left\langle
-\nabla_\Theta \mathcal{L}(\mathbf{x}_p),
-\nabla_\Theta \mathcal{L}(\mathbf{x}_q)
-\right\rangle
-}{
-\|\nabla_\Theta \mathcal{L}(\mathbf{x}_p)\|_2
-\,
-\|\nabla_\Theta \mathcal{L}(\mathbf{x}_q)\|_2
-}.
-\label{eq:interference}
-\end{equation}
-A negative value indicates destructive interference.
+\subsection{Interpretation in terms of local geometry}
 
-Under the proposed rule, if two samples are assigned to different latent regions, then their memberships $g_k^{[\ell]}(\mathbf{x}_p)$ and $g_k^{[\ell]}(\mathbf{x}_q)$ concentrate on different prototypes, and thus they update different region-specific matrices more strongly. Consequently, the overlap between their parameter updates is reduced. This suggests that the proposed method can mitigate destructive interference between distant regions of the data distribution.
+The role of local geometry enters the model in two coupled ways.
+
+First, the prototype memberships modulate the effective output computation via \eqref{eq:mix_logits}. Samples that lie in different regions of hidden space therefore activate different mixtures of output experts.
+
+Second, the same memberships define the auxiliary target \eqref{eq:localtarget}, which regularizes the hidden representation toward a geometry-dependent direction. Therefore, the hidden representation is shaped both by the supervised label signal and by the local geometric structure induced by the prototypes.
+
+This is the sense in which the present method uses local geometry information: local distances in hidden representation space influence both the forward computation and the learned hidden-space regularization.
 
 \section{Illustration for the one-hidden-layer network}
 
-For the one-hidden-layer FFNN in Fig.~\ref{fig:NN}, let $\mathbf{a}^{[0]}=(a_1^{[0]},a_2^{[0]})^\top$ be the hidden representation. Suppose $K_1$ latent prototypes are introduced at this hidden layer. Then for sample $\mathbf{x}$,
+For the one-hidden-layer FFNN in Fig.~\ref{fig:NN}, the hidden representation is
 \[
-g_k^{[1]}(\mathbf{x})
-=
-\frac{
-\exp\!\left(
--\frac{\|\mathbf{a}^{[0]}(\mathbf{x})-\mathbf{c}_k^{[1]}\|_2^2}{\tau_1}
-\right)
-}{
-\sum_{r=1}^{K_1}
-\exp\!\left(
--\frac{\|\mathbf{a}^{[0]}(\mathbf{x})-\mathbf{c}_r^{[1]}\|_2^2}{\tau_1}
-\right)
-},
+\mathbf{h}(\mathbf{x})=\tanh(W_h\mathbf{x}+\mathbf{b}_h).
 \]
-and the effective output-layer weight becomes
+Given prototypes $\{\mathbf{c}_k\}_{k=1}^{K}$, the memberships are computed by \eqref{eq:gating}. The output logits of the $k$th expert are
 \[
-\widetilde{W}^{[1]}(\mathbf{x})
-=
-\sum_{k=1}^{K_1}
-g_k^{[1]}(\mathbf{x})\,W_k^{[1]}.
+\mathbf{z}_k^{\mathrm{exp}}(\mathbf{x})=W_k^{\mathrm{exp}}\mathbf{h}(\mathbf{x})+\mathbf{b}_k^{\mathrm{exp}},
 \]
-Thus the output neuron no longer receives the same parameter vector for every input. Instead, the parameter vector is adapted according to the sample's position in the hidden representation space. The hidden-to-output update is then modulated by the same memberships, yielding a local and geometry-aware credit assignment mechanism.
+and the final logits are
+\[
+\mathbf{z}(\mathbf{x})=\sum_{k=1}^{K}g_k(\mathbf{x})\,\mathbf{z}_k^{\mathrm{exp}}(\mathbf{x}).
+\]
+Thus, the output mapping is no longer globally fixed across all inputs; it depends on the sample's location in hidden representation space. The same memberships define the auxiliary target
+\[
+\mathbf{t}(\mathbf{x})=\sum_{k=1}^{K}g_k(\mathbf{x})\,\boldsymbol{\phi}_k,
+\]
+which induces the local loss in \eqref{eq:locloss}. The model is then trained end-to-end by minimizing \eqref{eq:empirical_objective}.
 
 \section{Pseudo-code}
 
 \begin{algorithm}[t]
-\caption{Geometry-Aware Local Credit Assignment}
+\caption{Geometry-Aware Prototype-Conditioned End-to-End Training}
 \label{alg:galca}
 \begin{algorithmic}[1]
-\Require Training set $\mathcal{D}=\{(\mathbf{x}^{(n)},y^{(n)})\}_{n=1}^{N}$, number of prototypes $K_\ell$ per layer, learning rate $\eta$, temperature $\tau_\ell$, local-loss weight $\lambda$
-\State Initialize region-specific weights $\{W_k^{[\ell]},\mathbf{b}_k^{[\ell]}\}$ for all layers $\ell$ and prototypes $k$
-\State Initialize latent prototypes $\{\mathbf{c}_k^{[\ell]}\}$ and local target vectors $\{\phi_k^{[\ell]}\}$
+\Require Training set $\mathcal{D}=\{(\mathbf{x}^{(n)},\mathbf{y}^{(n)})\}_{n=1}^{N}$, number of prototypes $K$, learning rate $\eta$, temperature $\tau$, local-loss weight $\lambda$
+\State Initialize hidden-layer parameters $W_h,\mathbf{b}_h$
+\State Initialize prototypes $\{\mathbf{c}_k\}_{k=1}^{K}$, local target vectors $\{\boldsymbol{\phi}_k\}_{k=1}^{K}$
+\State Initialize expert parameters $\{W_k^{\mathrm{exp}},\mathbf{b}_k^{\mathrm{exp}}\}_{k=1}^{K}$
 \For{each epoch}
-    \For{each mini-batch $\mathcal{B}\subset\mathcal{D}$}
-        \For{each sample $(\mathbf{x},y)\in\mathcal{B}$}
-            \For{each layer $\ell=1,\dots,L$}
-                \State Compute representation $\mathbf{a}^{[\ell-1]}(\mathbf{x})$
-                \State Compute memberships $g_k^{[\ell]}(\mathbf{x})$ using \eqref{eq:gating}
-                \State Form effective parameters
-                \[
-                \widetilde{W}^{[\ell]}(\mathbf{x})=\sum_{k=1}^{K_\ell} g_k^{[\ell]}(\mathbf{x})W_k^{[\ell]},
-                \quad
-                \widetilde{\mathbf{b}}^{[\ell]}(\mathbf{x})=\sum_{k=1}^{K_\ell} g_k^{[\ell]}(\mathbf{x})\mathbf{b}_k^{[\ell]}
-                \]
-                \State Compute $\mathbf{z}^{[\ell]}$ and $\mathbf{a}^{[\ell]}$
-            \EndFor
-            \State Compute output loss $\mathcal{L}_{\mathrm{out}}$
-            \For{each hidden layer $\ell=1,\dots,L-1$}
-                \State Compute local target $\mathbf{t}^{[\ell]}(\mathbf{x})$ using \eqref{eq:localtarget}
-                \State Compute local loss $\mathcal{L}_{\mathrm{loc}}^{[\ell]}(\mathbf{x})$
-                \State Compute local error
-                \[
-                \delta_{\mathrm{loc}}^{[\ell]}(\mathbf{x})
-                =
-                \left(\mathbf{a}^{[\ell]}(\mathbf{x})-\mathbf{t}^{[\ell]}(\mathbf{x})\right)
-                \odot \sigma'(\mathbf{z}^{[\ell]}(\mathbf{x}))
-                \]
-                \For{each prototype $k=1,\dots,K_\ell$}
-                    \State Update
-                    \[
-                    W_k^{[\ell]}
-                    \leftarrow
-                    W_k^{[\ell]}
-                    -
-                    \eta\, g_k^{[\ell]}(\mathbf{x})\,
-                    \delta_{\mathrm{loc}}^{[\ell]}(\mathbf{x})
-                    \left(\mathbf{a}^{[\ell-1]}(\mathbf{x})\right)^\top
-                    \]
-                    \State Update $\mathbf{b}_k^{[\ell]}$ similarly
-                \EndFor
-            \EndFor
-            \State Update output-layer parameters using the supervised loss $\mathcal{L}_{\mathrm{out}}$
-            \State Update prototypes $\mathbf{c}_k^{[\ell]}$ using exponential moving averages of the representations weighted by $g_k^{[\ell]}(\mathbf{x})$
+    \For{each minibatch $\mathcal{B}\subset\mathcal{D}$}
+        \For{each sample $(\mathbf{x},\mathbf{y})\in\mathcal{B}$}
+            \State Compute hidden representation $\mathbf{h}(\mathbf{x})=\tanh(W_h\mathbf{x}+\mathbf{b}_h)$
+            \State Compute memberships $g_k(\mathbf{x})$ using \eqref{eq:gating}
+            \State Compute expert logits $\mathbf{z}_k^{\mathrm{exp}}(\mathbf{x})$ using \eqref{eq:expert_logits}
+            \State Compute mixed logits $\mathbf{z}(\mathbf{x})=\sum_{k=1}^{K}g_k(\mathbf{x})\,\mathbf{z}_k^{\mathrm{exp}}(\mathbf{x})$
+            \State Compute local target $\mathbf{t}(\mathbf{x})=\sum_{k=1}^{K}g_k(\mathbf{x})\,\boldsymbol{\phi}_k$
+            \State Compute supervised loss $\mathcal{L}_{\mathrm{out}}(\mathbf{x},\mathbf{y})$
+            \State Compute local loss $\mathcal{L}_{\mathrm{loc}}(\mathbf{x})$
+            \State Form total loss $\mathcal{L}_{\mathrm{impl}}(\mathbf{x},\mathbf{y})=\mathcal{L}_{\mathrm{out}}(\mathbf{x},\mathbf{y})+\lambda\,\mathcal{L}_{\mathrm{loc}}(\mathbf{x})$
         \EndFor
+        \State Compute minibatch average of $\mathcal{L}_{\mathrm{impl}}$
+        \State Backpropagate through the full computational graph
+        \State Update all parameters in $\Theta$ using one optimizer step
     \EndFor
 \EndFor
 \end{algorithmic}
@@ -341,20 +277,19 @@ Thus the output neuron no longer receives the same parameter vector for every in
 
 \section{Discussion}
 
-The proposed formulation differs from the earlier variable-weight model in three important ways. First, the central object is no longer a special scalar weight parameterization; instead, it is a geometry-aware local credit assignment rule. Second, the notion of locality is defined in the hidden representation space rather than in raw input space. Third, the expected benefit is not merely extra flexibility of the weights, but a reduction in destructive interference between distant data regions.
+The proposed formulation differs from earlier hand-designed local update proposals in an important way: the present implementation is fully differentiable and internally closed. The prototype memberships, expert parameters, prototypes themselves, and auxiliary target vectors are all learned jointly by gradient descent on the implemented objective. Consequently, there is no ambiguity about how the prototype vectors or local target vectors are updated, and there is no mismatch between the stated objective and the implemented optimizer.
 
-This formulation is attractive both theoretically and practically. On the theory side, one may analyze simplified settings in which separated latent regions induce weakly overlapping updates and therefore lower cross-region interference. On the simulation side, the method can be implemented in standard FFNNs, convolutional networks, or multilayer perceptrons and compared against ordinary backpropagation, feedback alignment, and prototype-based baselines.
+At the same time, the model preserves the central geometry-aware idea: samples in different regions of hidden space induce different effective mixtures of output experts, and the same local geometry defines the auxiliary target used to regularize the hidden representation.
 
-The proposed framework therefore offers a more coherent route toward a potentially fundamental contribution: the guiding principle is that credit assignment in neural networks should be local and geometry-aware, rather than purely global.
-
+The intended benefit is not necessarily a universal improvement over standard backpropagation, but rather a geometry-aware inductive bias that may reduce destructive interference between distant data regions and improve performance in settings where globally shared updates are suboptimal.
 
 \section{A simplified interference-reduction result}
 
-In this section, we provide a first theoretical justification for the proposed geometry-aware local credit assignment rule. The goal is not to analyze the full nonlinear network in complete generality, but rather to isolate the central mechanism in a simplified setting and show that latent-region gating reduces the overlap between updates induced by samples from different regions.
+The implementation in this paper is trained end-to-end by gradient descent on the differentiable objective \eqref{eq:empirical_objective}. The result below should therefore be interpreted as a simplified mechanism analysis that isolates the interference-reduction effect of geometry-aware gating. It is not claimed to be a full convergence theorem for the exact nonlinear optimizer used in the implementation.
 
 \subsection{Setup}
 
-Consider a one-hidden-layer network. Let $\mathbf{a}^{[0]}(\mathbf{x}) \in \RR^{d}$ denote the hidden representation of sample $\mathbf{x}$. For the output layer, we introduce $K$ region-specific matrices
+Consider a one-hidden-layer network with hidden representation $\mathbf{h}(\mathbf{x})\in\RR^d$. For theoretical analysis, suppose the output layer is written as a collection of region-specific matrices
 \[
 W_1,\dots,W_K \in \RR^{m\times d},
 \]
@@ -365,16 +300,16 @@ and define the effective output-layer weight
 \end{equation}
 where $g_k(\mathbf{x})\ge 0$ and $\sum_{k=1}^{K} g_k(\mathbf{x})=1$.
 
-For the purpose of analysis, suppose the local update for region $k$ induced by sample $\mathbf{x}$ is
+To isolate the effect of gating, consider the simplified sample-induced update
 \begin{equation}
 \Delta W_k(\mathbf{x})
 =
--\eta\, g_k(\mathbf{x})\, \boldsymbol{\delta}(\mathbf{x})\,\mathbf{a}^{[0]}(\mathbf{x})^\top,
+-\eta\, g_k(\mathbf{x})\, \boldsymbol{\delta}(\mathbf{x})\,\mathbf{h}(\mathbf{x})^\top,
 \label{eq:theory_update}
 \end{equation}
-where $\eta>0$ is the learning rate and $\boldsymbol{\delta}(\mathbf{x})\in\RR^{m}$ is the local error vector associated with the output or local target.
+where $\eta>0$ is the learning rate and $\boldsymbol{\delta}(\mathbf{x})\in\RR^{m}$ is a generic error vector. This update is not the exact optimizer of the full implemented model; rather, it captures the geometry-gated rank-one update component that the proposition studies.
 
-To measure interaction between two sample-induced updates, we define the total update overlap
+To measure interaction between two sample-induced updates, define the total overlap
 \begin{equation}
 \Omega(\mathbf{x}_p,\mathbf{x}_q)
 =
@@ -386,8 +321,6 @@ To measure interaction between two sample-induced updates, we define the total u
 \label{eq:overlap_def}
 \end{equation}
 where $\langle A,B\rangle_F = \mathrm{tr}(A^\top B)$ denotes the Frobenius inner product.
-
-A large positive value of $\Omega(\mathbf{x}_p,\mathbf{x}_q)$ indicates that the two samples update the same region-specific parameters in aligned directions, while a small magnitude indicates weak coupling. If the two samples correspond to unrelated latent regions, weak coupling is desirable, as it reduces the extent to which one region perturbs the parameters used by another.
 
 \subsection{Preliminary lemma}
 
@@ -432,7 +365,7 @@ Consider two samples $\mathbf{x}_p$ and $\mathbf{x}_q$ with updates defined by \
 =
 \eta^2
 \Bigl(\boldsymbol{\delta}(\mathbf{x}_p)^\top \boldsymbol{\delta}(\mathbf{x}_q)\Bigr)
-\Bigl(\mathbf{a}^{[0]}(\mathbf{x}_p)^\top \mathbf{a}^{[0]}(\mathbf{x}_q)\Bigr)
+\Bigl(\mathbf{h}(\mathbf{x}_p)^\top \mathbf{h}(\mathbf{x}_q)\Bigr)
 \sum_{k=1}^{K} g_k(\mathbf{x}_p)\,g_k(\mathbf{x}_q).
 \label{eq:overlap_formula}
 \end{equation}
@@ -443,8 +376,8 @@ Hence,
 \eta^2
 \|\boldsymbol{\delta}(\mathbf{x}_p)\|_2
 \|\boldsymbol{\delta}(\mathbf{x}_q)\|_2
-\|\mathbf{a}^{[0]}(\mathbf{x}_p)\|_2
-\|\mathbf{a}^{[0]}(\mathbf{x}_q)\|_2
+\|\mathbf{h}(\mathbf{x}_p)\|_2
+\|\mathbf{h}(\mathbf{x}_q)\|_2
 \sum_{k=1}^{K} g_k(\mathbf{x}_p)\,g_k(\mathbf{x}_q).
 \label{eq:overlap_bound}
 \end{equation}
@@ -460,13 +393,13 @@ From \eqref{eq:theory_update},
 \[
 \Delta W_k(\mathbf{x}_p)
 =
--\eta\, g_k(\mathbf{x}_p)\,\boldsymbol{\delta}(\mathbf{x}_p)\,\mathbf{a}^{[0]}(\mathbf{x}_p)^\top
+-\eta\, g_k(\mathbf{x}_p)\,\boldsymbol{\delta}(\mathbf{x}_p)\,\mathbf{h}(\mathbf{x}_p)^\top
 \]
 and
 \[
 \Delta W_k(\mathbf{x}_q)
 =
--\eta\, g_k(\mathbf{x}_q)\,\boldsymbol{\delta}(\mathbf{x}_q)\,\mathbf{a}^{[0]}(\mathbf{x}_q)^\top.
+-\eta\, g_k(\mathbf{x}_q)\,\boldsymbol{\delta}(\mathbf{x}_q)\,\mathbf{h}(\mathbf{x}_q)^\top.
 \]
 Therefore,
 \begin{align*}
@@ -476,19 +409,19 @@ Therefore,
 &=
 \eta^2 g_k(\mathbf{x}_p)g_k(\mathbf{x}_q)
 \left\langle
-\boldsymbol{\delta}(\mathbf{x}_p)\mathbf{a}^{[0]}(\mathbf{x}_p)^\top,\,
-\boldsymbol{\delta}(\mathbf{x}_q)\mathbf{a}^{[0]}(\mathbf{x}_q)^\top
+\boldsymbol{\delta}(\mathbf{x}_p)\mathbf{h}(\mathbf{x}_p)^\top,\,
+\boldsymbol{\delta}(\mathbf{x}_q)\mathbf{h}(\mathbf{x}_q)^\top
 \right\rangle_F.
 \end{align*}
 Applying Lemma~\ref{lem:rankone},
 \[
 \left\langle
-\boldsymbol{\delta}(\mathbf{x}_p)\mathbf{a}^{[0]}(\mathbf{x}_p)^\top,\,
-\boldsymbol{\delta}(\mathbf{x}_q)\mathbf{a}^{[0]}(\mathbf{x}_q)^\top
+\boldsymbol{\delta}(\mathbf{x}_p)\mathbf{h}(\mathbf{x}_p)^\top,\,
+\boldsymbol{\delta}(\mathbf{x}_q)\mathbf{h}(\mathbf{x}_q)^\top
 \right\rangle_F
 =
 \Bigl(\boldsymbol{\delta}(\mathbf{x}_p)^\top \boldsymbol{\delta}(\mathbf{x}_q)\Bigr)
-\Bigl(\mathbf{a}^{[0]}(\mathbf{x}_p)^\top \mathbf{a}^{[0]}(\mathbf{x}_q)\Bigr).
+\Bigl(\mathbf{h}(\mathbf{x}_p)^\top \mathbf{h}(\mathbf{x}_q)\Bigr).
 \]
 Summing over $k$ gives
 \[
@@ -496,7 +429,7 @@ Summing over $k$ gives
 =
 \eta^2
 \Bigl(\boldsymbol{\delta}(\mathbf{x}_p)^\top \boldsymbol{\delta}(\mathbf{x}_q)\Bigr)
-\Bigl(\mathbf{a}^{[0]}(\mathbf{x}_p)^\top \mathbf{a}^{[0]}(\mathbf{x}_q)\Bigr)
+\Bigl(\mathbf{h}(\mathbf{x}_p)^\top \mathbf{h}(\mathbf{x}_q)\Bigr)
 \sum_{k=1}^{K} g_k(\mathbf{x}_p)\,g_k(\mathbf{x}_q),
 \]
 which proves \eqref{eq:overlap_formula}.
@@ -508,9 +441,9 @@ The bound \eqref{eq:overlap_bound} follows directly from Cauchy--Schwarz:
 \|\boldsymbol{\delta}(\mathbf{x}_p)\|_2 \|\boldsymbol{\delta}(\mathbf{x}_q)\|_2,
 \]
 \[
-|\mathbf{a}^{[0]}(\mathbf{x}_p)^\top \mathbf{a}^{[0]}(\mathbf{x}_q)|
+|\mathbf{h}(\mathbf{x}_p)^\top \mathbf{h}(\mathbf{x}_q)|
 \le
-\|\mathbf{a}^{[0]}(\mathbf{x}_p)\|_2 \|\mathbf{a}^{[0]}(\mathbf{x}_q)\|_2.
+\|\mathbf{h}(\mathbf{x}_p)\|_2 \|\mathbf{h}(\mathbf{x}_q)\|_2.
 \]
 Substituting these inequalities into \eqref{eq:overlap_formula} yields the result.
 \end{proof}
@@ -524,9 +457,9 @@ S(\mathbf{x}_p,\mathbf{x}_q)
 \sum_{k=1}^{K} g_k(\mathbf{x}_p)\,g_k(\mathbf{x}_q).
 \label{eq:similarity_factor}
 \end{equation}
-This factor lies in $[0,1]$. It is large when the two samples activate similar latent regions and small when they activate different latent regions. Therefore, the proposed gated update rule naturally reduces coupling between samples that belong to different parts of the hidden representation space.
+This factor lies in $[0,1]$. It is large when the two samples activate similar latent regions and small when they activate different latent regions. Therefore, geometry-aware gating naturally reduces coupling between samples that belong to different parts of hidden representation space.
 
-By contrast, in a standard globally shared output layer without latent-region gating, the corresponding overlap term does not contain the factor $S(\mathbf{x}_p,\mathbf{x}_q)$. Hence there is no explicit mechanism to suppress cross-region interaction. The present proposition therefore formalizes the basic intuition behind the method: \emph{geometry-aware gating reduces cross-region update overlap and can thereby reduce destructive interference.}
+By contrast, in a globally shared output layer without prototype-conditioned gating, there is no explicit factor analogous to \eqref{eq:similarity_factor} that suppresses cross-region interaction. The proposition therefore formalizes the key qualitative mechanism behind the proposed model.
 
 \subsection{A useful corollary}
 
@@ -544,8 +477,8 @@ Consequently,
 \eta^2
 \|\boldsymbol{\delta}(\mathbf{x}_p)\|_2
 \|\boldsymbol{\delta}(\mathbf{x}_q)\|_2
-\|\mathbf{a}^{[0]}(\mathbf{x}_p)\|_2
-\|\mathbf{a}^{[0]}(\mathbf{x}_q)\|_2
+\|\mathbf{h}(\mathbf{x}_p)\|_2
+\|\mathbf{h}(\mathbf{x}_q)\|_2
 (2\varepsilon-\varepsilon^2).
 \label{eq:eps_overlap_bound}
 \end{equation}
@@ -563,7 +496,7 @@ Substituting this into \eqref{eq:overlap_bound} completes the proof.
 
 \subsection{Remark on scope}
 
-The above result does not yet establish global convergence of the full nonlinear network, nor does it claim that all forms of interference are eliminated. Rather, it isolates one mathematically precise mechanism: when geometry-aware memberships concentrate on different latent regions, the overlap between the corresponding parameter updates is explicitly suppressed. This provides a concrete theoretical basis for the claim that local geometry-aware credit assignment can reduce cross-region interference.
+The above result does not establish global convergence of the full nonlinear model trained by \eqref{eq:update}, nor does it claim that all forms of interference are eliminated. Rather, it isolates one mathematically precise mechanism: when geometry-aware memberships concentrate on different latent regions, the overlap between the corresponding gated update components is explicitly suppressed. This provides a concrete theoretical basis for the claim that local geometry can reduce cross-region interference.
 
 \begin{thebibliography}{99}
 
