@@ -448,6 +448,489 @@ The bound \eqref{eq:overlap_bound} follows directly from Cauchy--Schwarz:
 Substituting these inequalities into \eqref{eq:overlap_formula} yields the result.
 \end{proof}
 
+\subsection{A Jacobian-based bound for hidden-layer update overlap}
+\label{subsec:hidden_jacobian_bound}
+
+The previous proposition isolates the interference-reduction mechanism at the
+prototype-conditioned output layer. We now derive a related bound for the
+hidden-layer update. The purpose is not to prove global convergence of the full
+nonlinear optimizer, but to show that the hidden-layer gradient itself admits a
+clean Jacobian-based representation, from which a local overlap bound follows.
+
+Let
+\[
+u(x)=W_hx+b_h, \qquad h(x)=\tanh(u(x)),
+\]
+and define the one-sample implemented loss
+\[
+\ell(x,y)=L_{\mathrm{impl}}(x,y)
+= L_{\mathrm{out}}(x,y)+\lambda L_{\mathrm{loc}}(x),
+\]
+where
+\[
+L_{\mathrm{loc}}(x)=\frac{1}{2}\|h(x)-t(x)\|_2^2.
+\]
+Let
+\[
+\delta_{\mathrm{out}}(x,y)
+:=\nabla_z L_{\mathrm{out}}(z(x),y)\in\mathbb{R}^C,
+\]
+and denote the Jacobians
+\[
+J_z(h):=\frac{\partial z}{\partial h}(h)\in\mathbb{R}^{C\times H},
+\qquad
+J_t(h):=\frac{\partial t}{\partial h}(h)\in\mathbb{R}^{H\times H}.
+\]
+
+Since the model is trained end-to-end through the full computational graph,
+the hidden-layer gradient is obtained by the exact chain rule.
+
+\paragraph{Local linearization viewpoint.}
+For a small perturbation \(\Delta h\) around a reference hidden state \(h\),
+the output map and auxiliary target admit the first-order expansions
+\[
+z(h+\Delta h)=z(h)+J_z(h)\Delta h + o(\|\Delta h\|_2),
+\]
+\[
+t(h+\Delta h)=t(h)+J_t(h)\Delta h + o(\|\Delta h\|_2).
+\]
+Thus the hidden-space sensitivity of the loss is governed locally by
+\(J_z(h)\) and \(J_t(h)\).
+
+\begin{prop}[Exact hidden-layer gradient identity]
+\label{prop:hidden_exact_gradient}
+For the one-hidden-layer geometry-aware model,
+\[
+\nabla_h \ell(x,y)
+=
+J_z(h(x))^\top \delta_{\mathrm{out}}(x,y)
++
+\lambda\bigl(I-J_t(h(x))\bigr)^\top \bigl(h(x)-t(x)\bigr).
+\]
+Consequently,
+\[
+\nabla_{W_h}\ell(x,y)=\psi(x,y)x^\top,
+\]
+where
+\[
+\psi(x,y)
+=
+D(x)\,\gamma(x,y),
+\qquad
+D(x):=\mathrm{diag}\bigl(1-h_1(x)^2,\dots,1-h_H(x)^2\bigr),
+\]
+and
+\[
+\gamma(x,y)
+=
+J_z(h(x))^\top \delta_{\mathrm{out}}(x,y)
++
+\lambda\bigl(I-J_t(h(x))\bigr)^\top \bigl(h(x)-t(x)\bigr).
+\]
+\end{prop}
+
+\begin{proof}
+By definition,
+\[
+\ell(x,y)=L_{\mathrm{out}}(z(x),y)+\frac{\lambda}{2}\|h(x)-t(x)\|_2^2.
+\]
+Applying the chain rule to the first term gives
+\[
+\nabla_h L_{\mathrm{out}}(z(x),y)=J_z(h(x))^\top \delta_{\mathrm{out}}(x,y).
+\]
+For the local term, let
+\[
+r(h)=h-t(h).
+\]
+Then
+\[
+L_{\mathrm{loc}}(x)=\frac{1}{2}\|r(h(x))\|_2^2,
+\]
+so
+\[
+\nabla_h L_{\mathrm{loc}}(x)
+=
+J_r(h(x))^\top r(h(x)),
+\qquad
+J_r(h)=I-J_t(h).
+\]
+Hence
+\[
+\nabla_h \ell(x,y)
+=
+J_z(h(x))^\top \delta_{\mathrm{out}}(x,y)
++
+\lambda\bigl(I-J_t(h(x))\bigr)^\top \bigl(h(x)-t(x)\bigr).
+\]
+Finally, since \(h(x)=\tanh(u(x))\) with \(u(x)=W_hx+b_h\),
+\[
+\frac{\partial h}{\partial u}(x)=D(x),
+\]
+and therefore
+\[
+\nabla_{W_h}\ell(x,y)
+=
+D(x)\,\nabla_h \ell(x,y)\,x^\top
+=
+\psi(x,y)x^\top.
+\]
+\end{proof}
+
+The proposition shows that the hidden-layer update remains rank one at the
+matrix level, but its left factor is now a nonlinear combination of two terms:
+a supervised term propagated through \(J_z(h)\), and a geometry-aware local
+term propagated through \(I-J_t(h)\).
+
+\begin{lem}[Explicit Jacobians]
+\label{lem:explicit_hidden_jacobians}
+For the prototype-conditioned model,
+\[
+J_t(h)
+=
+\sum_{k=1}^K \phi_k \bigl(\nabla_h g_k(h)\bigr)^\top,
+\]
+and
+\[
+J_z(h)
+=
+\sum_{k=1}^K g_k(h)\,W_k^{\mathrm{exp}}
++
+\sum_{k=1}^K z_k^{\mathrm{exp}}(h)\bigl(\nabla_h g_k(h)\bigr)^\top.
+\]
+\end{lem}
+
+\begin{proof}
+Since
+\[
+t(h)=\sum_{k=1}^K g_k(h)\phi_k,
+\]
+differentiating term by term yields
+\[
+J_t(h)=\sum_{k=1}^K \phi_k \bigl(\nabla_h g_k(h)\bigr)^\top.
+\]
+Similarly, from
+\[
+z(h)=\sum_{k=1}^K g_k(h)z_k^{\mathrm{exp}}(h),
+\qquad
+z_k^{\mathrm{exp}}(h)=W_k^{\mathrm{exp}}h+b_k^{\mathrm{exp}},
+\]
+the product rule gives
+\[
+J_z(h)
+=
+\sum_{k=1}^K
+\left(
+g_k(h)\frac{\partial z_k^{\mathrm{exp}}}{\partial h}(h)
++
+z_k^{\mathrm{exp}}(h)\bigl(\nabla_h g_k(h)\bigr)^\top
+\right).
+\]
+Since
+\[
+\frac{\partial z_k^{\mathrm{exp}}}{\partial h}(h)=W_k^{\mathrm{exp}},
+\]
+the result follows.
+\end{proof}
+
+We now quantify the overlap between two hidden-layer updates.
+
+\begin{prop}[Jacobian-based hidden-layer overlap formula]
+\label{prop:hidden_overlap_formula}
+For two samples \((x_p,y_p)\) and \((x_q,y_q)\), define
+\[
+\Delta W_h(x,y):=-\eta \nabla_{W_h}\ell(x,y)
+=
+-\eta\,\psi(x,y)x^\top.
+\]
+Their hidden-layer update overlap is
+\[
+\Omega_h(x_p,x_q)
+:=
+\left\langle
+\Delta W_h(x_p,y_p),\Delta W_h(x_q,y_q)
+\right\rangle_F.
+\]
+Then
+\[
+\Omega_h(x_p,x_q)
+=
+\eta^2\bigl(\psi(x_p,y_p)^\top \psi(x_q,y_q)\bigr)
+\bigl(x_p^\top x_q\bigr).
+\]
+Hence,
+\[
+|\Omega_h(x_p,x_q)|
+\le
+\eta^2
+\|x_p\|_2\|x_q\|_2
+\|\psi(x_p,y_p)\|_2
+\|\psi(x_q,y_q)\|_2.
+\]
+Since \(\|D(x)\|_2\le 1\) for \(\tanh\), it follows that
+\[
+|\Omega_h(x_p,x_q)|
+\le
+\eta^2
+\|x_p\|_2\|x_q\|_2
+\|\gamma(x_p,y_p)\|_2
+\|\gamma(x_q,y_q)\|_2.
+\]
+\end{prop}
+
+\begin{proof}
+From Proposition~\ref{prop:hidden_exact_gradient},
+\[
+\Delta W_h(x,y)=-\eta\,\psi(x,y)x^\top.
+\]
+Applying the Frobenius rank-one identity from Lemma 6.1 gives
+\[
+\Omega_h(x_p,x_q)
+=
+\eta^2
+\left\langle
+\psi(x_p,y_p)x_p^\top,\,
+\psi(x_q,y_q)x_q^\top
+\right\rangle_F
+=
+\eta^2
+\bigl(\psi(x_p,y_p)^\top\psi(x_q,y_q)\bigr)
+\bigl(x_p^\top x_q\bigr).
+\]
+The bound then follows by Cauchy--Schwarz. Since each diagonal entry of
+\(D(x)\) is \(1-h_i(x)^2\in[0,1]\), we have \(\|D(x)\|_2\le 1\), which yields
+\[
+\|\psi(x,y)\|_2\le \|\gamma(x,y)\|_2.
+\]
+\end{proof}
+
+The preceding proposition is exact. To obtain a more interpretable local bound,
+we now impose bounded-Jacobian assumptions in a neighborhood of hidden space.
+
+\begin{cor}[Local Jacobian-norm bound]
+\label{cor:hidden_local_bound}
+Assume that there exists a neighborhood \(\mathcal{U}\subset\mathbb{R}^H\) such
+that for all \(h\in\mathcal{U}\),
+\[
+\|J_z(h)\|_2\le M_z,
+\qquad
+\|J_t(h)\|_2\le M_t,
+\]
+and for all samples whose hidden states lie in \(\mathcal{U}\),
+\[
+\|\delta_{\mathrm{out}}(x,y)\|_2\le B_{\mathrm{out}},
+\qquad
+\|h(x)-t(x)\|_2\le B_{\mathrm{loc}}.
+\]
+Then for any two such samples,
+\[
+|\Omega_h(x_p,x_q)|
+\le
+\eta^2
+\|x_p\|_2\|x_q\|_2
+\Bigl(
+M_z B_{\mathrm{out}}
++
+\lambda(1+M_t)B_{\mathrm{loc}}
+\Bigr)^2.
+\]
+\end{cor}
+
+\begin{proof}
+From Proposition~\ref{prop:hidden_exact_gradient},
+\[
+\|\gamma(x,y)\|_2
+\le
+\|J_z(h(x))^\top \delta_{\mathrm{out}}(x,y)\|_2
++
+\lambda
+\left\|
+\bigl(I-J_t(h(x))\bigr)^\top (h(x)-t(x))
+\right\|_2.
+\]
+Therefore,
+\[
+\|\gamma(x,y)\|_2
+\le
+\|J_z(h(x))\|_2\,\|\delta_{\mathrm{out}}(x,y)\|_2
++
+\lambda\bigl(1+\|J_t(h(x))\|_2\bigr)\|h(x)-t(x)\|_2.
+\]
+Using the assumed bounds yields
+\[
+\|\gamma(x,y)\|_2
+\le
+M_z B_{\mathrm{out}}+\lambda(1+M_t)B_{\mathrm{loc}}.
+\]
+Substituting this into Proposition~\ref{prop:hidden_overlap_formula} gives
+the result.
+\end{proof}
+
+The next statement connects the bound more explicitly to prototype
+concentration. It shows that, away from prototype boundaries, the hidden-layer
+signal is close to a region-specific backpropagated term plus a region-specific
+auxiliary correction.
+
+\begin{cor}[Dominant-prototype approximation]
+\label{cor:dominant_prototype_hidden}
+Assume that for a sample \(x\) there exists an index \(k^\star(x)\) such that
+\[
+g_{k^\star(x)}(x)\ge 1-\varepsilon,
+\qquad
+\sum_{k\neq k^\star(x)} g_k(x)\le \varepsilon,
+\]
+for some \(\varepsilon\in[0,1]\). Assume further that
+\[
+\|W_k^{\mathrm{exp}}\|_2\le M_W,\qquad
+\|z_k^{\mathrm{exp}}(h)\|_2\le B_{\mathrm{exp}},\qquad
+\|\phi_k\|_2\le M_\phi,
+\]
+for all \(k\), and that
+\[
+\|\nabla_h g_k(h)\|_2\le \rho
+\]
+for all \(k\) in a neighborhood of interest. Then
+\[
+\|J_z(h)-W_{k^\star(x)}^{\mathrm{exp}}\|_2
+\le
+2\varepsilon M_W + K\rho B_{\mathrm{exp}},
+\]
+\[
+\|J_t(h)\|_2\le K\rho M_\phi,
+\qquad
+\|t(h)-\phi_{k^\star(x)}\|_2\le 2\varepsilon M_\phi.
+\]
+Consequently,
+\[
+\left\|
+\gamma(x,y)
+-
+\Bigl(
+[W_{k^\star(x)}^{\mathrm{exp}}]^\top\delta_{\mathrm{out}}(x,y)
++
+\lambda\bigl(h(x)-\phi_{k^\star(x)}\bigr)
+\Bigr)
+\right\|_2
+\le
+R(x,y),
+\]
+where
+\[
+R(x,y)
+=
+\bigl(2\varepsilon M_W + K\rho B_{\mathrm{exp}}\bigr)
+\|\delta_{\mathrm{out}}(x,y)\|_2
++
+\lambda\Bigl(
+2\varepsilon M_\phi
++
+K\rho M_\phi \|h(x)-t(x)\|_2
+\Bigr).
+\]
+\end{cor}
+
+\begin{proof}
+Using Lemma~\ref{lem:explicit_hidden_jacobians},
+\[
+J_z(h)-W_{k^\star}^{\mathrm{exp}}
+=
+\sum_{k=1}^K g_k(h)W_k^{\mathrm{exp}}-W_{k^\star}^{\mathrm{exp}}
++
+\sum_{k=1}^K z_k^{\mathrm{exp}}(h)(\nabla_h g_k(h))^\top.
+\]
+For the first term,
+\[
+\left\|
+\sum_{k=1}^K g_k(h)W_k^{\mathrm{exp}}-W_{k^\star}^{\mathrm{exp}}
+\right\|_2
+\le
+|g_{k^\star}(h)-1|\,\|W_{k^\star}^{\mathrm{exp}}\|_2
++
+\sum_{k\neq k^\star} g_k(h)\|W_k^{\mathrm{exp}}\|_2
+\le 2\varepsilon M_W.
+\]
+For the second term,
+\[
+\left\|
+\sum_{k=1}^K z_k^{\mathrm{exp}}(h)(\nabla_h g_k(h))^\top
+\right\|_2
+\le
+\sum_{k=1}^K \|z_k^{\mathrm{exp}}(h)\|_2\,\|\nabla_h g_k(h)\|_2
+\le K\rho B_{\mathrm{exp}}.
+\]
+Hence
+\[
+\|J_z(h)-W_{k^\star}^{\mathrm{exp}}\|_2
+\le 2\varepsilon M_W + K\rho B_{\mathrm{exp}}.
+\]
+
+Similarly,
+\[
+\|J_t(h)\|_2
+=
+\left\|
+\sum_{k=1}^K \phi_k(\nabla_h g_k(h))^\top
+\right\|_2
+\le
+\sum_{k=1}^K \|\phi_k\|_2\,\|\nabla_h g_k(h)\|_2
+\le K\rho M_\phi.
+\]
+Also,
+\[
+t(h)-\phi_{k^\star}
+=
+(g_{k^\star}(h)-1)\phi_{k^\star}
++
+\sum_{k\neq k^\star} g_k(h)\phi_k,
+\]
+so
+\[
+\|t(h)-\phi_{k^\star}\|_2
+\le
+|g_{k^\star}(h)-1|\,\|\phi_{k^\star}\|_2
++
+\sum_{k\neq k^\star} g_k(h)\|\phi_k\|_2
+\le 2\varepsilon M_\phi.
+\]
+
+Finally,
+\[
+\gamma
+-
+\Bigl(
+W_{k^\star}^{\mathrm{exp}\,\top}\delta_{\mathrm{out}}
++\lambda(h-\phi_{k^\star})
+\Bigr)
+=
+\bigl(J_z^\top-W_{k^\star}^{\mathrm{exp}\,\top}\bigr)\delta_{\mathrm{out}}
++
+\lambda\Bigl(
+(h-t)-J_t^\top(h-t)-(h-\phi_{k^\star})
+\Bigr).
+\]
+The second bracket equals
+\[
+(\phi_{k^\star}-t)-J_t^\top(h-t).
+\]
+Applying the triangle inequality together with the bounds above yields the
+stated residual bound.
+\end{proof}
+
+Corollary~\ref{cor:dominant_prototype_hidden} formalizes the following
+intuition. When a sample lies well inside a latent region, the membership map
+is concentrated and locally smooth, so the hidden-layer gradient is well
+approximated by a region-specific backpropagated signal
+\([W_{k^\star(x)}^{\mathrm{exp}}]^\top\delta_{\mathrm{out}}(x,y)\)
+plus a region-specific auxiliary correction
+\(\lambda(h(x)-\phi_{k^\star(x)})\).
+The approximation degrades only near prototype boundaries or when the
+memberships are highly diffuse.
+
+\paragraph{Remark on scope.}
+This subsection still does not constitute a full convergence analysis of the exact
+nonlinear optimizer. Rather, it provides a local Jacobian-based control of the
+hidden-layer update and shows explicitly how prototype concentration and
+membership smoothness influence the hidden credit signal.
+
 \subsection{Interpretation}
 
 Proposition~\ref{prop:overlap_reduction} shows that the overlap between two sample-induced updates is scaled by the membership similarity factor
