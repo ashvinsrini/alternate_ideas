@@ -981,17 +981,125 @@ Substituting this into \eqref{eq:overlap_bound} completes the proof.
 
 The above result does not establish global convergence of the full nonlinear model trained by \eqref{eq:update}, nor does it claim that all forms of interference are eliminated. Rather, it isolates one mathematically precise mechanism: when geometry-aware memberships concentrate on different latent regions, the overlap between the corresponding gated update components is explicitly suppressed. This provides a concrete theoretical basis for the claim that local geometry can reduce cross-region interference.
 
-\begin{thebibliography}{99}
 
-\bibitem{ffnn}
-Andina, D., Pham, D., Vega-Corona, A., Seijas, J., Torres-Garc\'ia, J.
-Neural Networks Historical Review.
+\section{Results}
+\label{sec:results}
 
-\bibitem{sgd}
-Rumelhart, D., Hinton, G., Williams, R.
-Learning representations by back-propagating errors.
-\emph{Nature}, 323, 533--536, 1986.
+We evaluate whether geometry-aware local conditioning improves over a standard backpropagation (BP) baseline while preserving the same end-to-end training pipeline. The results are organized around three questions: (i) does the proposed method improve predictive performance, (ii) does it alter optimization dynamics in a way consistent with the mechanism analysis, and (iii) do the learned prototypes capture meaningful structure in hidden space.
 
-\end{thebibliography}
+\subsection{Experimental protocol}
+Across all experiments, the standard BP baseline and the proposed geometry-local model share the same backbone, optimizer, training budget, and random seeds; the only change is the addition of trainable hidden-space prototypes, prototype-conditioned output experts, and the auxiliary local loss. We report mean $\pm$ 95\% confidence interval over five seeds.
+
+For the dummy task and MNIST, we use a one-hidden-layer MLP with hidden dimension $16$ trained for $80$ epochs. The geometry-local model uses $\lambda_{\mathrm{local}}=0.02$, $K=8$ prototypes, and temperature $\tau=3.0$. For Fashion-MNIST, we use the same MLP with a $30$-epoch budget and perform a grid search over $\lambda_{\mathrm{local}} \in \{0,0.01,0.02,0.05\}$, $K \in \{4,8,12\}$, and $\tau \in \{0.5,1.0,3.0\}$; the reported geometry-local result is the validation-selected configuration. For CIFAR-10, we use a small CNN backbone followed by a hidden representation of dimension $256$ and train for $50$ epochs; the geometry-local model uses $\lambda_{\mathrm{local}}=0.01$, $K=8$, and $\tau=1.0$.
+
+In addition to final test accuracy and test loss, we also track two optimization diagnostics: the within-epoch standard deviation of batch losses and the within-epoch standard deviation of hidden-layer gradient norms. These diagnostics are useful because the theory does not predict uniformly smaller gradients; rather, it predicts more localized, geometry-dependent credit assignment.
+
+\begin{table*}[t]
+\centering
+\caption{Main quantitative results over five seeds. Lower is better for test loss and epochs-to-target, while higher is better for test accuracy. The Fashion-MNIST geometry-local row corresponds to the validation-selected configuration.}
+\label{tab:main_results}
+\begin{tabular}{|l|l|c|c|c|}
+\hline
+Dataset & Method & Test accuracy $\uparrow$ & Test loss $\downarrow$ & Epochs-to-target $\downarrow$ \\
+\hline
+Dummy & Standard BP & $0.9975 \pm 0.0022$ & $0.0066 \pm 0.0029$ & $2.4 \pm 0.68$ \\
+Dummy & Geometry-local & $\mathbf{0.9988 \pm 0.0023}$ & $\mathbf{0.0059 \pm 0.0061}$ & $\mathbf{1.0 \pm 0.0}$ \\
+\hline
+MNIST & Standard BP & $0.9036 \pm 0.0034$ & $0.4599 \pm 0.0315$ & -- \\
+MNIST & Geometry-local & $\mathbf{0.9108 \pm 0.0040}$ & $\mathbf{0.4555 \pm 0.0136}$ & -- \\
+\hline
+Fashion-MNIST & Standard BP & $\mathbf{0.8399 \pm 0.0040}$ & $\mathbf{0.4598 \pm 0.0065}$ & -- \\
+Fashion-MNIST & Geometry-local & $0.8396 \pm 0.0041$ & $0.5030 \pm 0.0168$ & -- \\
+\hline
+CIFAR-10 & Standard BP & $0.7800 \pm 0.0131$ & $0.9536 \pm 0.0924$ & $\mathbf{6.2 \pm 1.04}$ \\
+CIFAR-10 & Geometry-local & $\mathbf{0.7896 \pm 0.0164}$ & $\mathbf{0.8430 \pm 0.0783}$ & $7.8 \pm 1.62$ \\
+\hline
+\end{tabular}
+\end{table*}
+
+\begin{figure*}[t]
+\centering
+\includegraphics[width=\textwidth]{dummy_perf.png}
+\includegraphics[width=\textwidth]{MNIST_perf.png}
+\caption{Results for dummy toy example, MNIST dataset}
+\label{fig:main_performance1}
+\end{figure*}
+
+\begin{figure*}[t]
+\centering
+\includegraphics[width=\textwidth]{CIFAR10_perf.png}
+\caption{Results for CIFAR10 dataset}
+\label{fig:main_performance2}
+\end{figure*}
+
+\subsection{Main quantitative comparison}
+The proposed method yields its clearest gain on the synthetic dummy task. It reaches the target validation accuracy in $1.0 \pm 0.0$ epochs, compared to $2.4 \pm 0.68$ epochs for standard BP, while also slightly improving final test accuracy and test loss. Since this task is explicitly multimodal, this result is consistent with the central hypothesis of the paper: when different regions of the data manifold would otherwise share a single global update, geometry-aware local conditioning can reduce destructive interference and speed up learning.
+
+On MNIST, the geometry-local model improves both test accuracy and test loss relative to standard BP. The gain in accuracy is modest in absolute terms, from $0.9036 \pm 0.0034$ to $0.9108 \pm 0.0040$, but it is consistent across all five seeds. Importantly, the method also slightly reduces within-epoch batch-loss variability. This suggests that the added geometric structure does not merely perturb training, but can produce a cleaner optimization trajectory while improving final generalization.
+
+Fashion-MNIST is the main boundary case. Under validation-based model selection, the best geometry-local configuration achieves a higher best validation accuracy than standard BP ($0.8584 \pm 0.0098$ versus $0.8542 \pm 0.0065$), but this does not translate into a test improvement for the selected configuration. The final test accuracy is essentially tied, while the geometry-local test loss is higher. This is an important negative-to-mixed result: it suggests that the method is not uniformly beneficial, and that its effect depends on how well the prototype geometry and local regularization strength are matched to the task.
+
+At the same time, the Fashion-MNIST grid search also shows that the method remains competitive under nearby hyperparameter choices. In particular, some non-selected configurations slightly exceed the BP baseline in test accuracy, e.g. $(\lambda_{\mathrm{local}}, K, \tau) = (0.02, 12, 3.0)$ reaches $0.8422 \pm 0.0048$. We therefore interpret Fashion-MNIST not as evidence against the method, but as evidence of sensitivity: the geometry-aware inductive bias is plausible, but its benefit is more tuning-dependent on this dataset.
+
+On CIFAR-10, the geometry-local model again improves the final solution. It increases test accuracy from $0.7800 \pm 0.0131$ to $0.7896 \pm 0.0164$ and reduces test loss from $0.9536 \pm 0.0924$ to $0.8430 \pm 0.0783$. Moreover, the geometry-local model attains lower test loss in all five seeds and higher test accuracy in four of the five seeds. This is the strongest evidence that the proposed mechanism remains useful beyond the shallow MLP setting and continues to help when the hidden representation is produced by a CNN backbone.
+
+The CIFAR-10 result is also informative in a second sense. Although the geometry-local model converges to a better final solution, it does \emph{not} reach the target validation threshold faster; standard BP reaches the threshold in $6.2 \pm 1.04$ epochs, whereas the geometry-local model requires $7.8 \pm 1.62$ epochs. This suggests that the proposed method should not be interpreted as a universal accelerator of early optimization. Its main benefit is instead a better final representation and a better final predictor, especially in more heterogeneous settings.
+
+\subsection{Optimization dynamics}
+From Figs.~\ref{fig:main_performance1},~\ref{fig:main_performance2}, a recurring pattern across datasets is that the geometry-local model yields comparable or slightly lower within-epoch batch-loss variability, while simultaneously producing larger hidden-gradient variability. This pattern is visible on MNIST and CIFAR-10, and to a lesser extent on the dummy task once the early transient phase has passed.
+
+This behavior is consistent with the mechanism analysis developed earlier in the paper. The goal of the geometry-aware design is not to globally suppress gradients. Rather, it is to make the effective update more sample-dependent by routing each hidden representation through soft prototype memberships and prototype-conditioned experts. Under this view, larger hidden-gradient variability is not a failure mode; it is evidence that the credit signal becomes more differentiated across regions of hidden space, instead of being homogenized by a single global output map.
+
+The loss-variability curves support the same interpretation. On MNIST and CIFAR-10, the geometry-local model achieves either similar or slightly lower within-epoch batch-loss dispersion despite the more structured hidden-layer dynamics. This suggests that local geometric modulation increases selectivity without destabilizing optimization.
+
+\subsection{Representation geometry}
+
+From Figs.~\ref{fig:prototype_visualization1},~\ref{fig:prototype_visualization2}, the hidden-space visualizations provide qualitative support for the proposed mechanism.
+
+On the dummy task, the learned prototypes spread across the occupied hidden regions rather than collapsing to a single point. Since the data are strongly multimodal, this is exactly the regime in which prototype-conditioned experts should help: different regions can be assigned different effective output mappings while still sharing the same backbone representation.
+
+On MNIST, the hidden representations occupy a bounded region shaped by the $\tanh$ hidden layer, and the learned prototypes are distributed across that bounded manifold. The key observation is again non-collapse: the model does not learn a single global template, but multiple local anchors that can be reused across samples.
+
+On CIFAR-10, the PCA projection of the hidden representation shows that the learned prototypes occupy distinct regions of the feature space produced by the CNN backbone. Even though the projection is only qualitative, it supports the claim that the method is using meaningful geometric structure in feature space rather than learning a degenerate gating pattern.
+
+\begin{figure*}[t]
+\centering
+\includegraphics[width=\textwidth]{dummy_geom.png}
+\includegraphics[width=\textwidth]{MNIST_geom.png}
+\caption{Hidden representation for  dummy toy example, MNIST dataset}
+\label{fig:prototype_visualization1}
+\end{figure*}
+
+\begin{figure*}[t]
+\centering
+\includegraphics[width=\textwidth]{CIFAR10_geom.png}
+\caption{Hidden representation for  CIFAR10 dataset}
+\label{fig:prototype_visualization2}
+\end{figure*}
+
+\begin{table}[t]
+\centering
+\includegraphics[width = \textwidth]{FashionMNIST_grid_search_results.png}
+\caption{Grid search for Fashion MNIST dataset}
+\label{tab:fashion_grid}
+\end{table}
+
+\subsection{Overall findings}
+Taken together, the experiments provide meaningful but appropriately scoped support for the theory and theme of the paper. The strongest support appears in the dummy task, where the multimodal structure is explicit and the geometry-local model reaches the target much faster. MNIST shows a smaller but consistent gain in final performance. CIFAR-10 shows that the same idea remains beneficial in a CNN setting, where the final test accuracy and test loss are both improved. Fashion-MNIST is mixed, which is scientifically useful: it shows that the method is not automatically superior under all configurations and that the quality of the learned local geometry matters.
+
+The main empirical takeaway is therefore not that geometry-local learning uniformly dominates standard BP. Rather, the evidence suggests a more precise claim: incorporating local geometry into the prediction pathway and into the hidden-space regularization can improve final performance and produce more differentiated internal credit assignment, especially when the task contains heterogeneous or multimodal structure. This is exactly the regime targeted by the mechanism analysis, and the observed optimization and representation trends are consistent with that interpretation.
+
+%\begin{thebibliography}{99}
+
+%\bibitem{ffnn}
+%Andina, D., Pham, D., Vega-Corona, A., Seijas, J., Torres-Garc\'ia, J.
+%Neural Networks Historical Review.
+
+%\bibitem{sgd}
+%Rumelhart, D., Hinton, G., Williams, R.
+%Learning representations by back-propagating errors.
+%\emph{Nature}, 323, 533--536, 1986.
+
+%\end{thebibliography}
 
 \end{document}
